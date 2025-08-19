@@ -1,2 +1,7 @@
 .venv/
 .env
+.scratch
+mlruns/
+__pycache__/
+CLAUDE.md
+db/
