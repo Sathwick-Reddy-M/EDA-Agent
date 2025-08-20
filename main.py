@@ -1,4 +1,6 @@
+from pathlib import Path
 import mlflow
+import sys
 
 mlflow.set_experiment("EDA-Agent")
 mlflow.autolog()
@@ -7,6 +9,7 @@ from dataset_understanding.agent import get_compiled_graph
 
 import asyncio
 from langchain_core.messages import HumanMessage, SystemMessage
+from asyncio.subprocess import PIPE
 
 
 async def run_chat():
@@ -38,4 +41,20 @@ async def run_chat():
                         print(f"Assistant: {value['messages'][-1].content}")
 
 
-asyncio.run(run_chat())
+async def run_script(entry: Path, cwd: Path) -> tuple[int, str, str]:
+    """Run the generated python script and capture output (async)."""
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-I", entry.name, cwd=str(cwd), stdout=PIPE, stderr=PIPE
+    )
+    out_b, err_b = await proc.communicate()
+    out = (out_b or b"").decode(errors="ignore").strip()
+    err = (err_b or b"").decode(errors="ignore").strip()
+    print(out, err, proc.returncode)
+    print(out_b, err_b, proc.returncode)
+
+    return proc.returncode, out, err
+
+
+asyncio.run(
+    run_script(Path("./coding_agent_space/hello.py"), Path("./coding_agent_space"))
+)

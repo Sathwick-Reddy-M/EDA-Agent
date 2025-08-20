@@ -1,7 +1,7 @@
 from typing import TypedDict, Annotated, List
 from contextlib import asynccontextmanager
 
-from langgraph.graph import StateGraph, END
+from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -70,7 +70,7 @@ def create_chat_agent(checkpointer: AsyncSqliteSaver):
     graph = StateGraph(State)
 
     graph.add_node("chat", chat_node)
-    graph.set_entry_point("chat")
+    graph.add_edge(START, "chat")
 
     # One assistant turn per user input
     graph.add_conditional_edges("chat", should_continue, {"chat": "chat", END: END})
