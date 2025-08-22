@@ -10,7 +10,7 @@ from langchain_core.runnables import RunnableConfig
 # Async checkpointer (requires: pip install langgraph-checkpoint-sqlite)
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-from utils.llm import get_model
+from utils.llm import get_llm
 from utils.db import DB_PATH
 
 
@@ -18,7 +18,7 @@ class State(TypedDict):
     messages: Annotated[List[BaseMessage], add_messages]
 
 
-llm = get_model("gemini-2.5-flash", "google_genai")
+llm = get_llm("gemini-2.5-flash", "google_genai")
 
 SYSTEM_PROMPT = "<SYSTEM PROMPT HERE>"
 
