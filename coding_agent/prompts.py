@@ -1,13 +1,18 @@
-def get_the_libraries_available():
-    """
-    Get the libraries available in the current environment.
+CODE_GEN_SYSTEM_PROMPT = """
+You are a Python code generator. Generate clean, executable Python code based on user requests.
+Output complete, runnable Python scripts only.
+"""
 
-    Returns:
-        list: A list of library names.
-    """
-    import pkgutil
+ERROR_RESOLUTION_SYSTEM_PROMPT = """
+You are a Python error resolver. Given code and an error, fix the code to resolve the error.
+Output the corrected complete Python code.
+"""
 
-    return sorted([pkg.name for pkg in pkgutil.iter_modules()])
+ERROR_RESOLUTION_PROMPT = """The following code had an error:
+```python
+{code}
+```
 
+Error: {error_text}
 
-print(get_the_libraries_available())
+Please fix the code to resolve this error."""
