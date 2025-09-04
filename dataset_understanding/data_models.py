@@ -14,3 +14,13 @@ class DatasetUnderstanding(BaseModel):
         ...,
         description="Mapping of column names to their descriptions (of what the column represent) in a couple of sentences.",
     )
+
+
+class UserChoice(BaseModel):
+    """Model for user YES/NO choices."""
+    choice: str = Field(..., description="User's choice: 'YES' or 'NO'")
+
+
+class DataDictionaryInput(BaseModel):
+    """Model for data dictionary input from user."""
+    content: str = Field(..., description="Data dictionary information provided by user")
