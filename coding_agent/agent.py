@@ -6,7 +6,7 @@ from utils.llm import get_llm, get_llm_with_structured_output
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnableConfig
 
@@ -36,14 +36,17 @@ llm = get_llm("gemini-2.5-flash", "google_genai")
 
 prompt = ChatPromptTemplate.from_messages(
     [
-        MessagesPlaceholder(variable_name="system_message"),
+        ("system", "{system_message}"),
         MessagesPlaceholder(variable_name="messages"),
     ]
 )
 
 
 async def generate_code(state: State, config: RunnableConfig) -> State:
-    system_message = [HumanMessage(content=CODE_GEN_SYSTEM_PROMPT)]
+    system_message = (
+        config.get("configurable", {}).get("system_message", None)
+        or CODE_GEN_SYSTEM_PROMPT
+    )
 
     code_gen_response = await (
         prompt | get_llm_with_structured_output(llm, CodeGenResponse)

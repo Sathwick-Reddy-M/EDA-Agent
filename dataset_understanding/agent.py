@@ -41,57 +41,54 @@ def add_list(prev: List[str], new: List[str]) -> List[str]:
     return prev + [new]
 
 
-async def csv_info_tool(
+async def run_null_value_analysis(
     thread_id: str = uuid.uuid4().hex,
-    system_prompt: str = "You are a data analysis assistant. Read the CSV file and provide DataFrame info.",
+    data_dictionary_info: Optional[str] = None,
 ) -> tuple[str, bool]:
     """
-    Uses the coding agent to read a CSV file and return DataFrame info.
-    Similar to chat_tool but specifically for CSV analysis.
-    Uses CSV_FILE_PATH from environment variables.
+    Runs a comprehensive NULL value analysis for the CSV file.
+    Returns: (analysis_result, success_flag)
+    """
+    system_message = "You are an coding agent that helps to understand the NULL values if present in the dataset."
 
-    Returns:
-        tuple[str, bool]: (analysis_result, success_flag)
-    """
     user_input = f"""
-    Please read the CSV file at '{Path(CSV_FILE_PATH).absolute()}' using pandas and print the following information:
-    1. df.info()
-    2. df.shape
-    3. df.columns.tolist()
-    4. df.head()
-    5. df.describe()
+
+    {f"Context from data dictionary: {data_dictionary_info}" if data_dictionary_info else ""}
+
+    Read the CSV file at '{Path(CSV_FILE_PATH).absolute()}' using pandas and perform the below NULL value analysis:
+
+    Load the dataset and get the columns info:
+        - use the .info() method to get a summary of the DataFrame including non-null counts and data types.
     
-    Make sure to import pandas as pd and handle any potential errors with try-except blocks.
-    If there are any errors, clearly explain what went wrong and provide suggestions for fixing the issue.
+    check for NULL values:
+       - df.isnull().sum() (count of NULL values per column)
+       - (df.isnull().sum() / len(df)) * 100 (percentage of NULL values per column)
+
+    Get the unique values for each column:
+        - Use the unique() method on the columns
+
+    Make sure you print those above outputs in a clear manner. 
+    
+    Handle any potential errors with try-except blocks and provide clear explanations.
     """
+
+    config = {
+        "configurable": {
+            "thread_id": thread_id,
+            "system_message": SystemMessage(content=system_message),
+        }
+    }
 
     async with get_coding_agent_graph() as app:
-        config = {
-            "configurable": {
-                "thread_id": thread_id,
-                "system_message": [SystemMessage(system_prompt)],
-            }
-        }
-        analysis_result = ""
-        execution_successful = True
 
-        async for event in app.astream(
+        final_state = await app.ainvoke(
             {"messages": [HumanMessage(content=user_input)]}, config=config
-        ):
-            for value in event.values():
-                if "messages" in value:
-                    message_content = value["messages"][-1].content
-                    analysis_result = message_content
-
-                    # Check if the execution failed based on common error indicators
-                    if any(
-                        error_phrase in message_content.lower()
-                        for error_phrase in ["error", "exception", "traceback"]
-                    ):
-                        execution_successful = False
+        )
+        execution_successful = final_state.get("error_text") is None
+        analysis_result = final_state.get("output")
 
         return (
-            analysis_result or "No analysis result received from coding agent.",
+            analysis_result,
             execution_successful,
         )
 
@@ -100,7 +97,7 @@ class State(TypedDict):
     messages: Annotated[List[BaseMessage], add_messages]
     data_dictionary_info: Annotated[List[str], add_list]
     collect_data_dictionary: bool
-    dataframe_info: Optional[str]
+    null_analysis_info: Optional[str]
 
 
 llm = get_llm("gemini-2.5-flash", "google_genai")
@@ -139,7 +136,7 @@ async def ask_for_data_dictionary_node(state: State, config: RunnableConfig) -> 
 
 
 async def collect_data_dictionary_node(state: State, config: RunnableConfig) -> State:
-    """Ask user about data dictionary availability."""
+    """Collect optional data dictionary information from the user."""
 
     user_input = input("Please provide the data dictionary information you have:\n")
 
@@ -199,57 +196,47 @@ async def collect_data_dictionary_node(state: State, config: RunnableConfig) -> 
     }
 
 
-async def code_generation_node(state: State, config: RunnableConfig) -> State:
-    """Code generation node that uses coding agent to analyze CSV file and incorporates data dictionary."""
+async def null_value_analyzer_node(state: State, config: RunnableConfig) -> State:
+    """Analyze NULL values in the dataset with reasoning based on any provided data dictionary."""
     _ = config  # Unused parameter
 
     # Get data dictionary information if available
     data_dict_info = "\n".join(state.get("data_dictionary_info", []))
 
-    # Use the coding agent to analyze the CSV file from environment
-    dataframe_analysis_result, execution_successful = await csv_info_tool(
+    # Run the NULL value analysis
+    null_analysis_result, execution_successful = await run_null_value_analysis(
         thread_id=uuid.uuid4(),
+        data_dictionary_info=data_dict_info if data_dict_info else None,
     )
 
-    # Use AI to explain the results or errors
-    system_message = [
-        "You are an assistant the helps me understand my dataset information."
-    ]
-
-    if execution_successful:
-        explanation_prompt = f"""
-        The coding agent successfully analyzed the CSV file at {CSV_FILE_PATH}. 
-        Here's the output:
-        
-        {dataframe_analysis_result}
-        
-        {f"Data dictionary information: {data_dict_info}" if data_dict_info else ""}
-        
-        Please explain what this dataset information tells us about the data structure, quality, and characteristics.
-        Keep it concise and practical.
-        """
+    if not execution_successful:
+        explanation_response = AIMessage(
+            content="There was an error during the NULL value analysis. Please check the coding agent for details."
+        )
     else:
-        explanation_prompt = f"""
-        The coding agent encountered an error while analyzing the CSV file at {CSV_FILE_PATH}.
-        Here's the error output:
-        
-        {dataframe_analysis_result}
-        
-        Please explain what went wrong and suggest how to fix it. Keep it simple and actionable.
-        """
-
-    # Get AI explanation
-    explanation_response = await (prompt | llm).ainvoke(
-        {
-            "messages": [HumanMessage(content=explanation_prompt)],
-            "system_message": system_message,
-        }
-    )
+        explanation_response = llm.invoke(
+            [
+                SystemMessage(
+                    content="You are a helpful assistant that explains the results of a NULL value analysis clearly and concisely."
+                ),
+                HumanMessage(
+                    content=f"Here are the results of the NULL value analysis:\n\n{null_analysis_result}\n\n.{"Here is the data dictionary info " + data_dict_info if data_dict_info else ""} Please provide a clear explanation of these results."
+                ),
+            ]
+        )
 
     return {
-        "messages": [AIMessage(content=explanation_response.content)],
-        "dataframe_info": dataframe_analysis_result if execution_successful else None,
+        "messages": [explanation_response],
+        "null_analysis_info": null_analysis_result if execution_successful else None,
     }
+
+
+async def code_generation_node(state: State, config: RunnableConfig) -> State:
+    """
+    Delegate immediately to the NULL value analyzer and return its results.
+    This stage no longer performs a separate DataFrame-info step.
+    """
+    return await null_value_analyzer_node(state, config)
 
 
 def has_data_dictionary(state: State) -> str:
@@ -259,15 +246,9 @@ def has_data_dictionary(state: State) -> str:
     return "code_generation"
 
 
-def should_continue_from_code_gen(state: State) -> str:
-    """Determine next step from code generation node."""
-    # Check if dataframe_info was successfully generated
-    if state.get("dataframe_info"):
-        # Analysis complete - end the flow
-        return END
-    else:
-        # If analysis failed, we could add error handling here
-        return END
+def should_end_after_code_gen(state: State) -> str:
+    """We now finish after code_generation (which performs NULL analysis)."""
+    return END
 
 
 def create_dataset_understanding_agent(checkpointer: AsyncSqliteSaver):
@@ -295,7 +276,9 @@ def create_dataset_understanding_agent(checkpointer: AsyncSqliteSaver):
 
     graph.add_edge("collect_data_dictionary", "code_generation")
 
-    graph.add_conditional_edges("code_generation", should_continue_from_code_gen)
+    graph.add_conditional_edges(
+        "code_generation", should_end_after_code_gen, {END: END}
+    )
 
     return graph.compile(checkpointer=checkpointer)
 
