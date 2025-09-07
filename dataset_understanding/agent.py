@@ -19,11 +19,20 @@ load_dotenv()
 from utils.llm import get_llm
 from utils.db import DB_PATH
 from coding_agent.agent import get_compiled_graph as get_coding_agent_graph
+from plot_understanding_agent.agent import (
+    get_compiled_graph as get_plot_understanding_agent_graph,
+)
 
 csv_file_path_env = os.getenv("CSV_FILE_PATH")
 if not csv_file_path_env:
     raise ValueError("CSV_FILE_PATH environment variable is not set.")
 CSV_FILE_PATH = csv_file_path_env
+
+plots_folder_path_env = os.getenv("PLOTS_FOLDER_PATH")
+if not plots_folder_path_env:
+    raise ValueError("PLOTS_FOLDER_PATH environment variable is not set.")
+PLOTS_FOLDER_PATH = plots_folder_path_env
+
 
 from .prompts import (
     SYSTEM_PROMPT,
@@ -93,11 +102,72 @@ async def run_null_value_analysis(
         )
 
 
+async def run_plot_generation(
+    user_input: str,
+    data_dict_info: Optional[str] = "",
+    thread_id: str = uuid.uuid4().hex,
+) -> tuple[str, bool]:
+    """
+    Runs a plot generation analysis based on the NULL value analysis.
+    Returns: (plot_info, success_flag)
+    """
+    system_message = "You are an coding agent that helps to generate plots."
+
+    plotgen_user_prompt = f"""
+    {user_input}
+
+    Generate the plots that are required to answer the above user query and save them to '{Path(PLOTS_FOLDER_PATH).absolute()}'.
+
+    {f"Context from data dictionary: {data_dict_info}" if data_dict_info else ""}
+
+    Here is the CSV file path: '{Path(CSV_FILE_PATH).absolute()}' which you can read using pandas to generate the plots.
+
+    You can use either the matplotlib, seaborn and plolty for generating the plots. Make sure to put all of the necessary plots required in two .png files.
+    
+    Handle any potential errors with try-except blocks and provide clear explanations.
+    """
+
+    config = {
+        "configurable": {
+            "thread_id": thread_id,
+            "system_message": SystemMessage(content=system_message),
+        }
+    }
+
+    async with get_coding_agent_graph() as app:
+
+        final_state = await app.ainvoke(
+            {"messages": [HumanMessage(content=plotgen_user_prompt)]}, config=config
+        )
+        execution_successful = final_state.get("error_text", None) is None
+        plot_info = final_state.get("output")
+
+    if not execution_successful:
+        return "There was an error during plot generation. Please check the coding agent for details."
+
+    async with get_plot_understanding_agent_graph() as app:
+
+        final_state = await app.ainvoke(
+            {
+                "messages": [
+                    HumanMessage(
+                        content=f"Analyze these plots and describe key insights regarding each plot and answer this user query {user_input}."
+                    )
+                ]
+            },
+            config=config,
+        )
+
+        plot_info = final_state["messages"][-1].content
+        return plot_info
+
+
 class State(TypedDict):
     messages: Annotated[List[BaseMessage], add_messages]
     data_dictionary_info: Annotated[List[str], add_list]
     collect_data_dictionary: bool
     null_analysis_info: Optional[str]
+    plot_info: Optional[str]
 
 
 llm = get_llm("gemini-2.5-flash", "google_genai")
@@ -231,7 +301,21 @@ async def null_value_analyzer_node(state: State, config: RunnableConfig) -> Stat
     }
 
 
-async def code_generation_node(state: State, config: RunnableConfig) -> State:
+async def plot_generation_node(state: State, config: RunnableConfig) -> State:
+
+    user_input_prompt = f"Can you tell me what kind of distribution for each of the numerical columns and the dominant categories for the categorical column? You can plot histograms with different bins or whatever plots that might make sense"
+
+    plot_generation_response = await run_plot_generation(
+        user_input_prompt, "\n\n".join(state.get("data_dictionary_info", []))
+    )
+
+    return {
+        "messages": [AIMessage(plot_generation_response)],
+        "plot_info": plot_generation_response,
+    }
+
+
+async def null_value_analysis_node(state: State, config: RunnableConfig) -> State:
     """
     Delegate immediately to the NULL value analyzer and return its results.
     This stage no longer performs a separate DataFrame-info step.
@@ -243,12 +327,7 @@ def has_data_dictionary(state: State) -> str:
     """Check if user has a data dictionary."""
     if state["collect_data_dictionary"]:
         return "collect_data_dictionary"
-    return "code_generation"
-
-
-def should_end_after_code_gen(state: State) -> str:
-    """We now finish after code_generation (which performs NULL analysis)."""
-    return END
+    return "null_value_analysis"
 
 
 def create_dataset_understanding_agent(checkpointer: AsyncSqliteSaver):
@@ -260,7 +339,8 @@ def create_dataset_understanding_agent(checkpointer: AsyncSqliteSaver):
     # Add nodes
     graph.add_node("ask_for_data_dictionary", ask_for_data_dictionary_node)
     graph.add_node("collect_data_dictionary", collect_data_dictionary_node)
-    graph.add_node("code_generation", code_generation_node)
+    graph.add_node("null_value_analysis", null_value_analysis_node)
+    graph.add_node("plot_generation", plot_generation_node)
 
     # Add edges
     graph.add_edge(START, "ask_for_data_dictionary")
@@ -270,15 +350,13 @@ def create_dataset_understanding_agent(checkpointer: AsyncSqliteSaver):
         has_data_dictionary,
         {
             "collect_data_dictionary": "collect_data_dictionary",
-            "code_generation": "code_generation",
+            "null_value_analysis": "null_value_analysis",
         },
     )
 
-    graph.add_edge("collect_data_dictionary", "code_generation")
-
-    graph.add_conditional_edges(
-        "code_generation", should_end_after_code_gen, {END: END}
-    )
+    graph.add_edge("collect_data_dictionary", "null_value_analysis")
+    graph.add_edge("null_value_analysis", "plot_generation")
+    graph.add_edge("plot_generation", END)
 
     return graph.compile(checkpointer=checkpointer)
 

@@ -58,6 +58,7 @@ async def generate_code(state: State, config: RunnableConfig) -> State:
     return {
         "messages": [response],
         "code": code_gen_response.code,
+        "error_text": None,
         "execution_count": 0,
     }
 
@@ -95,7 +96,7 @@ async def resolve_error(state: State, config: RunnableConfig) -> State:
     system_message = [HumanMessage(content=ERROR_RESOLUTION_SYSTEM_PROMPT)]
 
     error_context = ERROR_RESOLUTION_PROMPT.format(
-        code=state["code"], error_context=state["error_text"]
+        code=state["code"], error_text=state.get("error_text")
     )
 
     messages = state["messages"] + [HumanMessage(content=error_context)]
