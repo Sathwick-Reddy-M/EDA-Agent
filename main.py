@@ -12,7 +12,7 @@ mlflow.autolog()
 #     save_graph_png,
 # )
 
-from dataset_understanding.agent import get_compiled_graph
+from main_agent.agent import get_compiled_graph
 
 import asyncio
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -27,26 +27,15 @@ async def run_chat():
 
         print("Chat Agent Started! Type 'q' or 'quit' to exit.")
 
-        while True:
-            user_input = input("\nYou: ")
-            if user_input.strip().lower() in {"q", "quit"}:
-                break
-
-            config = {
-                "configurable": {
-                    "thread_id": thread_id,
-                    "system_message": [SystemMessage("You are a helpful assistant.")],
-                }
+        config = {
+            "configurable": {
+                "thread_id": thread_id,
+                "system_message": [SystemMessage("You are a helpful assistant.")],
             }
+        }
 
-            # Stream a single assistant turn; the graph will END after replying
-            async for event in app.astream(
-                {"messages": [HumanMessage(content=user_input)]},
-                config=config,
-            ):
-                for value in event.values():
-                    if "messages" in value:
-                        print(f"Assistant: {value['messages'][-1].content}")
+        result = await app.ainvoke({}, config=config)  # single run, no loop
+        print(result)
 
 
 asyncio.run(run_chat())
