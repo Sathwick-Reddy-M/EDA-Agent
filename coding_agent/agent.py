@@ -15,7 +15,6 @@ from utils.db import DB_PATH, CODING_AGENT_DIR_PATH
 from .data_models import CodeGenResponse, ErrorResolutionResponse
 from .prompts import (
     CODE_GEN_SYSTEM_PROMPT,
-    ERROR_RESOLUTION_SYSTEM_PROMPT,
     ERROR_RESOLUTION_PROMPT,
 )
 from .helpers import write_to_file, run_script
@@ -25,9 +24,11 @@ from .helpers import write_to_file, run_script
 
 class State(TypedDict):
     messages: Annotated[List[BaseMessage], add_messages]
+    task: str
+    task_output: str
     code: Optional[str]
     error_text: Optional[str]
-    output: Optional[str]
+    code_exec_output: Optional[str]
     execution_count: int
 
 
@@ -43,20 +44,22 @@ prompt = ChatPromptTemplate.from_messages(
 
 
 async def generate_code(state: State, config: RunnableConfig) -> State:
-    system_message = (
-        config.get("configurable", {}).get("system_message", None)
-        or CODE_GEN_SYSTEM_PROMPT
-    )
+    system_message = config.get("configurable", {}).get(
+        "system_message", None
+    ) or SystemMessage(CODE_GEN_SYSTEM_PROMPT)
 
     code_gen_response = await (
         prompt | get_llm_with_structured_output(llm, CodeGenResponse)
-    ).ainvoke({"messages": state["messages"], "system_message": system_message})
+    ).ainvoke(
+        {"messages": [HumanMessage(state["task"])], "system_message": system_message}
+    )
 
     response = AIMessage(
         content=f"Generated code:\n```python\n{code_gen_response.code}\n```"
     )
+
     return {
-        "messages": [response],
+        "messages": [system_message, HumanMessage(state["task"]), response],
         "code": code_gen_response.code,
         "error_text": None,
         "execution_count": 0,
@@ -69,10 +72,11 @@ async def execute_code(state: State) -> State:
         return {
             "error_text": "No code to execute.",
             "execution_count": state.get("execution_count", 0),
+            "code_exec_output": None,
         }
 
     await write_to_file(CODING_AGENT_DIR_PATH / "placeholder.py", code)
-    return_code, output, err = await run_script(
+    return_code, code_exec_output, err = await run_script(
         CODING_AGENT_DIR_PATH / "placeholder.py", CODING_AGENT_DIR_PATH
     )
 
@@ -80,20 +84,21 @@ async def execute_code(state: State) -> State:
 
     if err or return_code != 0:
         error_msg = err or f"Script failed with return code {return_code}"
-        return {"error_text": error_msg, "execution_count": execution_count}
+        return {
+            "error_text": error_msg,
+            "execution_count": execution_count,
+            "code_exec_output": None,
+        }
 
-    response = AIMessage(content=f"Execution successful. Output:\n{output}")
     return {
-        "output": output,
+        "code_exec_output": code_exec_output,
         "error_text": None,
         "execution_count": execution_count,
-        "messages": [response],
     }
 
 
 async def resolve_error(state: State, config: RunnableConfig) -> State:
     """Resolve code errors by generating corrected code."""
-    system_message = [HumanMessage(content=ERROR_RESOLUTION_SYSTEM_PROMPT)]
 
     error_context = ERROR_RESOLUTION_PROMPT.format(
         code=state["code"], error_text=state.get("error_text")
@@ -101,9 +106,9 @@ async def resolve_error(state: State, config: RunnableConfig) -> State:
 
     messages = state["messages"] + [HumanMessage(content=error_context)]
 
-    error_resolution_response = await (
-        prompt | get_llm_with_structured_output(llm, ErrorResolutionResponse)
-    ).ainvoke({"messages": messages, "system_message": system_message})
+    error_resolution_response = await get_llm_with_structured_output(
+        llm, ErrorResolutionResponse
+    ).ainvoke({"messages": messages})
 
     response = AIMessage(
         content=f"Fixed code (attempt {state.get('execution_count', 0) + 1}):\n```python\n{error_resolution_response.code}\n```"
@@ -118,7 +123,24 @@ def should_continue_after_execution(state: State) -> str:
         if execution_count >= 3:  # Max 3 attempts
             return "end_with_failure"
         return "resolve_error"
-    return END
+    return "generate_task_output"
+
+
+def generate_task_output(state: State) -> str:
+    human_msg = HumanMessage(
+        "Here is the task provided:\n"
+        + state["task"]
+        + "\nHere is the output from executing the code:\n"
+        + (state.get("code_exec_output"))
+        + "\nBased on the execution output, provide a concise summary of the results based on asked task."
+    )
+
+    llm_response = llm.invoke(state["messages"] + [human_msg])
+
+    return {
+        "task_output": llm_response.content,
+        "messages": [human_msg, AIMessage(llm_response.content)],
+    }
 
 
 def create_coding_agent(checkpointer: AsyncSqliteSaver):
@@ -133,29 +155,21 @@ def create_coding_agent(checkpointer: AsyncSqliteSaver):
     graph.add_node("resolve_error", resolve_error)
     graph.add_node(
         "end_with_failure",
-        lambda state: {
-            "messages": [AIMessage(content="Failed to execute code after 3 attempts.")]
-        },
+        lambda state: {"task_output": "Failed to execute code after 3 attempts."},
     )
+    graph.add_node("generate_task_output", generate_task_output)
 
     # Add edges
     graph.add_edge(START, "generate_code")
 
     graph.add_edge("generate_code", "execute")
 
-    graph.add_conditional_edges(
-        "execute",
-        should_continue_after_execution,
-        {
-            "resolve_error": "resolve_error",
-            "end_with_failure": "end_with_failure",
-            END: END,
-        },
-    )
+    graph.add_conditional_edges("execute", should_continue_after_execution)
 
     graph.add_edge("resolve_error", "execute")
 
     graph.add_edge("end_with_failure", END)
+    graph.add_edge("generate_task_output", END)
 
     return graph.compile(checkpointer=checkpointer)
 

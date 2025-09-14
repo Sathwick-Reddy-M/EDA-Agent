@@ -12,9 +12,9 @@ from langgraph.types import Send
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-from .helpers import is_folder_empty, get_data_filenames
+from .helpers import get_data_file_paths
 
-from utils.paths import get_data_folder_path
+from coding_agent.agent import get_compiled_graph as get_coding_agent_graph
 
 
 import os
@@ -33,9 +33,10 @@ def merge_dicts(left: dict[str, str], right: dict[str, str]) -> dict[str, str]:
 class State(TypedDict):
     messages: Annotated[List[BaseMessage], add_messages]
     is_data_folder_empty: bool
-    uploaded_files: List[str]
+    uploaded_files: dict[str, str]
     filename: str  # transient, set by Send for each worker
-    file_info: Annotated[dict[str, str], merge_dicts]
+    file_info_from_user: Annotated[dict[str, str], merge_dicts]
+    file_info_from_llm: Annotated[dict[str, str], merge_dicts]
 
 
 llm = get_llm("gemini-2.5-flash", "google_genai")
@@ -56,7 +57,7 @@ async def check_for_the_files(state: State) -> State:
 
     if not data_folder_path:
         raise ValueError("DATA_FOLDER_PATH environment variable is not set.")
-    uploaded_files = await get_data_filenames(data_folder_path, ignore_hidden=True)
+    uploaded_files = await get_data_file_paths(data_folder_path, ignore_hidden=True)
 
     return {
         "is_data_folder_empty": (len(uploaded_files) == 0),
@@ -67,14 +68,50 @@ async def check_for_the_files(state: State) -> State:
 def continue_from_check_for_the_files(state: State):
     if state["is_data_folder_empty"]:
         return END
-    return [Send("get_file_info", {"filename": f}) for f in state["uploaded_files"]]
+    return [
+        Send(
+            "get_file_info_from_user",
+            {"filename": f, "uploaded_files": state["uploaded_files"]},
+        )
+        for f in state["uploaded_files"]
+    ] + [
+        Send(
+            "get_file_info_from_llm",
+            {"filename": f, "uploaded_files": state["uploaded_files"]},
+        )
+        for f in state["uploaded_files"]
+    ]
 
 
-def get_file_info(state: State) -> str:
+def get_file_info_from_user(state: State) -> str:
     filename = state["filename"]
-    file_info = input(f"Provide a brief description of the file '{filename}': ")
+    file_info_from_user = input(
+        f"Provide a brief description of the file '{filename}': "
+    )
 
-    return {"file_info": {filename: file_info}}
+    return {"file_info_from_user": {filename: file_info_from_user}}
+
+
+async def answer_with_coding_agent(task: str, config: RunnableConfig) -> str:
+    async with get_coding_agent_graph() as app:
+        final_state = await app.ainvoke(
+            {"task": task},
+            config=config,
+        )
+
+        if final_state.get("error_text"):
+            return final_state["error_text"]
+
+        return final_state["task_output"]
+
+
+async def get_file_info_from_llm(state: State, config: RunnableConfig) -> str:
+    filename = state["filename"]
+
+    task = f"I want to get a brief description of the file named '{filename}' which is stored at {state['uploaded_files'][filename]}. The description provided should include the basic details about the file such as number of rows, columns, data types of columns, unique values in each column, null value proportions. Finally, your understanding of what the file represents."
+
+    file_info_from_llm = await answer_with_coding_agent(task, config)
+    return {"file_info_from_llm": {filename: file_info_from_llm}}
 
 
 def create_eda_agent(checkpointer: AsyncSqliteSaver):
@@ -89,12 +126,21 @@ def create_eda_agent(checkpointer: AsyncSqliteSaver):
 
     graph.add_edge(START, "check_for_the_files")
 
-    graph.add_node("get_file_info", get_file_info)
+    graph.add_node("get_file_info_from_user", get_file_info_from_user)
 
     graph.add_conditional_edges(
         "check_for_the_files", continue_from_check_for_the_files
     )
-    graph.add_edge("get_file_info", END)
+    graph.add_edge("get_file_info_from_user", END)
+    graph.add_node("get_file_info_from_llm", get_file_info_from_llm)
+    graph.add_edge("get_file_info_from_llm", END)
+
+    # graph.add_node(
+    #     "get_file_info_from_llm", get_file_info_from_llm
+    # )  # Agent that uses LLM and returns a dictionary of file descriptions.
+    # graph.add_node(
+    #     "query"
+    # )  # Agent that translates the User Query to Python code and/or visualizations and returns the results
 
     return graph.compile(checkpointer=checkpointer)
 

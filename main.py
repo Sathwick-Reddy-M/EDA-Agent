@@ -30,11 +30,21 @@ async def run_chat():
         config = {
             "configurable": {
                 "thread_id": thread_id,
-                "system_message": [SystemMessage("You are a helpful assistant.")],
             }
         }
 
-        result = await app.ainvoke({}, config=config)  # single run, no loop
+        # result = await app.ainvoke(
+        #     {
+        #         "task": "Read the csv file at /Users/sathwick/SDrive/projects/EDA-Agent/coding_agent_space/data/sample.csv and give me the column names and their data types.",
+        #     },
+        #     config=config,
+        # )
+
+        result = await app.ainvoke(
+            {},
+            config=config,
+        )
+
         print(result)
 
 

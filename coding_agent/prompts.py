@@ -1,12 +1,11 @@
 CODE_GEN_SYSTEM_PROMPT = """
-You are a Python code generator. Generate clean, executable Python code based on user requests.
+You are a Python code generator. Generate clean, executable Python code based on the given requests.
 Output complete, runnable Python scripts only.
+
+If there is an execution error you will be given the error message and make sure to fix the code. After fixing the code,
+make sure to output the complete, corrected Python script not just the fix.
 """
 
-ERROR_RESOLUTION_SYSTEM_PROMPT = """
-You are a Python error resolver. Given code and an error, fix the code to resolve the error.
-Output the corrected complete Python code.
-"""
 
 ERROR_RESOLUTION_PROMPT = """The following code had an error:
 ```python
