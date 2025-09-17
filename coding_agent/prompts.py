@@ -4,6 +4,8 @@ Output complete, runnable Python scripts only.
 
 If there is an execution error you will be given the error message and make sure to fix the code. After fixing the code,
 make sure to output the complete, corrected Python script not just the fix.
+
+Never assume the dataset. Always, Always load the dataset from the available CSV files if provided.
 """
 
 

@@ -2,6 +2,11 @@ import asyncio
 from pathlib import Path
 from typing import List, Optional, Sequence, Union
 
+from langchain_core.runnables import RunnableConfig
+
+from coding_agent.agent import get_compiled_graph as get_coding_agent_graph
+from plotting_agent.agent import get_compiled_graph as get_plotting_agent_graph
+
 
 async def is_folder_empty(path: Union[str, Path], ignore_hidden: bool = True) -> bool:
     """
@@ -90,3 +95,29 @@ async def get_data_file_paths(
         return out
 
     return await asyncio.to_thread(scan)
+
+
+async def answer_with_coding_agent(task: str, config: RunnableConfig) -> str:
+    async with get_coding_agent_graph() as app:
+        final_state = await app.ainvoke(
+            {"task": task},
+            config=config,
+        )
+
+        if final_state.get("error_text"):
+            return final_state["error_text"], False
+
+        return final_state["task_output"], True
+
+
+async def answer_with_plotting_agent(task: str, config: RunnableConfig) -> str:
+    async with get_plotting_agent_graph() as app:
+        final_state = await app.ainvoke(
+            {"task": task},
+            config=config,
+        )
+
+        if final_state.get("plot_gen_error"):
+            return final_state["task_output"], False
+
+        return final_state["task_output"], True

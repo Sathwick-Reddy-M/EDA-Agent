@@ -41,7 +41,9 @@ async def run_chat():
         # )
 
         result = await app.ainvoke(
-            {},
+            {
+                "query": "Give me the survival rates of the passengers based on their gender."
+            },
             config=config,
         )
 
