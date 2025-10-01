@@ -40,14 +40,18 @@ async def run_chat():
         #     config=config,
         # )
 
-        result = await app.ainvoke(
-            {
-                "query": "Give me the survival rates of the passengers based on their gender."
-            },
-            config=config,
-        )
+        while (query := input("Enter your query: ")) not in ["q", "quit"]:
+            if not query.strip():
+                continue
 
-        print(result)
+            result = await app.ainvoke(
+                {
+                    "query": query,
+                },
+                config=config,
+            )
+
+            print(result)
 
 
 asyncio.run(run_chat())

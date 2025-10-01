@@ -108,7 +108,7 @@ async def resolve_error(state: State, config: RunnableConfig) -> State:
 
     error_resolution_response = await get_llm_with_structured_output(
         llm, ErrorResolutionResponse
-    ).ainvoke([messages])
+    ).ainvoke(messages)
 
     response = AIMessage(
         content=f"Fixed code (attempt {state.get('execution_count', 0) + 1}):\n```python\n{error_resolution_response.code}\n```"
