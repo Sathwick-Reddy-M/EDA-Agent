@@ -12,10 +12,6 @@ def get_env_variable(var_name: str) -> str:
     return value
 
 
-def get_csv_file_path() -> str:
-    return get_env_variable("CSV_FILE_PATH")
-
-
 def get_plots_folder_path() -> str:
     return get_env_variable("PLOTS_FOLDER_PATH")
 
